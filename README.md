@@ -6,11 +6,49 @@ This is a reproducible SQL analytics demo by **Murthy Sai Dhanush**. It uses a f
 
 ## Data model
 
+```mermaid
+erDiagram
+    CUSTOMERS ||--o{ ORDERS : places
+    ORDERS ||--|{ ORDER_ITEMS : contains
+    PRODUCTS ||--o{ ORDER_ITEMS : "sold as"
+    ORDERS ||--o{ PAYMENTS : "paid by"
+
+    CUSTOMERS {
+        int customer_id PK
+        varchar full_name
+        varchar city
+        date signup_date
+    }
+    PRODUCTS {
+        int product_id PK
+        varchar product_name
+        varchar category
+        decimal list_price
+    }
+    ORDERS {
+        int order_id PK
+        int customer_id FK
+        date order_date
+        varchar status "delivered / shipped / cancelled / returned"
+    }
+    ORDER_ITEMS {
+        int order_item_id PK
+        int order_id FK
+        int product_id FK
+        int quantity
+        decimal unit_price "price at time of sale"
+    }
+    PAYMENTS {
+        int payment_id PK
+        int order_id FK
+        varchar payment_method
+        decimal amount
+        varchar payment_status "completed / refunded"
+        date paid_on
+    }
 ```
-customers 1──* orders 1──* order_items *──1 products
-                  │
-                  └──* payments        (an order can have 2 payments: Wallet + card/UPI)
-```
+
+An order can have 2 payments (Wallet + card/UPI), which is why payments and items must never be joined row-to-row.
 
 | Table | Rows | Notes |
 |---|---|---|
@@ -32,6 +70,19 @@ customers 1──* orders 1──* order_items *──1 products
 
 1. Item-level metrics (products, categories) query `order_items` at its own grain and never join `payments`.
 2. When items and payments are needed together, each table is first **aggregated to one row per order in its own CTE**, and only then joined.
+
+```mermaid
+flowchart LR
+    OI["order_items<br/>many rows per order"] --> A["CTE item_totals<br/>SUM(quantity × unit_price)<br/>GROUP BY order_id"]
+    P["payments<br/>many rows per order"] --> B["CTE payment_totals<br/>SUM(amount)<br/>GROUP BY order_id"]
+    O["orders<br/>one row per order"] --> J
+    A -->|"1 row per order"| J["JOIN on order_id<br/>(1 : 1 : 1)"]
+    B -->|"1 row per order"| J
+    J --> R["Reconcile<br/>items ₹515,395 = payments ₹515,395<br/>0 mismatched orders"]
+
+    OI -. "naive join of both tables" .-> W["❌ ₹618,785.70<br/>rows multiply"]
+    P -.-> W
+```
 
 `q8_double_counting_pitfall` shows the difference on this data:
 
